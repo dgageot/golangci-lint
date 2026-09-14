@@ -37,6 +37,7 @@ type hashResults map[HashMode]string
 type Cache struct {
 	lowLevelCache cache.Cache
 	pkgHashes     sync.Map
+	pkgHashLocks  sync.Map
 	sw            *timeutils.Stopwatch
 	log           logutils.Log
 	ioSem         chan struct{} // semaphore limiting parallel IO
@@ -129,6 +130,15 @@ func (c *Cache) pkgActionID(pkg *packages.Package, mode HashMode) (cache.ActionI
 
 func (c *Cache) packageHash(pkg *packages.Package, mode HashMode) (string, error) {
 	results, found := c.pkgHashes.Load(pkg)
+	if !found {
+		// Import edges form a DAG, so locking dependencies cannot create a cycle.
+		lock, _ := c.pkgHashLocks.LoadOrStore(pkg, new(sync.Mutex))
+		mu := lock.(*sync.Mutex)
+		mu.Lock()
+		defer mu.Unlock()
+
+		results, found = c.pkgHashes.Load(pkg)
+	}
 	if found {
 		hashRes := results.(hashResults)
 		if result, ok := hashRes[mode]; ok {
