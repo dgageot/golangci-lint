@@ -3,6 +3,7 @@ package processors
 import (
 	"go/parser"
 	"go/token"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -41,17 +42,24 @@ func NewFilenameUnadjuster(pkgs []*packages.Package, log logutils.Log) *Filename
 
 	startedAt := time.Now()
 
+	const maxWorkers = 8 // Limit concurrent file I/O.
 	var wg sync.WaitGroup
-
-	for chunk := range slices.Chunk(pkgs, len(pkgs)/2000+1) {
+	chunks := make(chan []*packages.Package)
+	for range min(maxWorkers, runtime.GOMAXPROCS(-1), len(pkgs)) {
 		wg.Go(func() {
-			for _, pkg := range chunk {
-				// It's important to call func here to run GC
-				processUnadjusterPkg(&m, pkg, log)
+			for chunk := range chunks {
+				for _, pkg := range chunk {
+					// It's important to call func here to run GC
+					processUnadjusterPkg(&m, pkg, log)
+				}
 			}
 		})
 	}
 
+	for chunk := range slices.Chunk(pkgs, len(pkgs)/2000+1) {
+		chunks <- chunk
+	}
+	close(chunks)
 	wg.Wait()
 
 	log.Infof("Pre-built %d adjustments in %s", len(m.m), time.Since(startedAt))
