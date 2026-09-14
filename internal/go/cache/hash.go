@@ -167,8 +167,11 @@ func FileHash(file string) ([HashSize]byte, error) {
 		}
 		return [HashSize]byte{}, err
 	}
-	_, err = io.Copy(h, f)
+	buf := hashFileBufferPool.Get().(*[32 * 1024]byte)
+	// Hide os.File.WriteTo so CopyBuffer uses the pooled buffer.
+	_, err = io.CopyBuffer(h, struct{ io.Reader }{f}, buf[:])
 	f.Close()
+	hashFileBufferPool.Put(buf)
 	if err != nil {
 		if debugHash {
 			fmt.Fprintf(os.Stderr, "HASH %s: %v\n", file, err)
